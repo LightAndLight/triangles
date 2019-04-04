@@ -1,5 +1,6 @@
 #include <GLFW/glfw3.h>
 #include <vulkan/vulkan.hpp>
+#include <optional>
 #include <stdexcept>
 
 class GLFW {
@@ -62,7 +63,10 @@ int main() {
      requiredExts.size(), requiredExts.data()
      );
 
-  auto instance = vk::createInstanceUnique(instanceInfo);
+  // vk::UniqueHandle<vk::Instance, vk::DispatchLoaderStatic> instance =
+  // vk::createInstanceUnique(instanceInfo);
+  vk::Instance instance = vk::createInstance(instanceInfo);
+  instance.destroy();
 
   return 0;
 }
