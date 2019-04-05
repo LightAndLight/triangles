@@ -187,6 +187,25 @@ public:
          (std::min(h, capabilities.minImageExtent.height),
           capabilities.maxImageExtent.height));
 
+    vk::SharingMode sharingMode;
+    std::vector<uint32_t> sharingIndices;
+    if (graphicsQfIx == presentQfIx) {
+      sharingMode = vk::SharingMode::eExclusive;
+      sharingIndices = {};
+    } else {
+      sharingMode = vk::SharingMode::eConcurrent;
+      sharingIndices = { graphicsQfIx, presentQfIx };
+    }
+
+    std::vector<vk::PresentModeKHR> presentModes =
+      physicalDevice.getSurfacePresentModesKHR(surface);
+    vk::PresentModeKHR swapchainPresentMode = vk::PresentModeKHR::eFifo;
+    for (auto &pm : presentModes) {
+      if (vk::PresentModeKHR::eMailbox == pm) {
+        swapchainPresentMode = pm;
+      }
+    }
+
     vk::SwapchainCreateInfoKHR swapchainInfo
       ({},
        surface,
@@ -199,7 +218,7 @@ public:
        sharingMode,
        sharingIndices.size(),
        sharingIndices.data(),
-       _,
+       capabilities.currentTransform,
        vk::CompositeAlphaFlagBitsKHR::eOpaque,
        swapchainPresentMode,
        true);
