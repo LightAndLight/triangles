@@ -28,6 +28,9 @@ private:
   vk::DebugUtilsMessengerEXT messenger;
   vk::Device device;
   vk::SwapchainKHR swapchain;
+  vk::RenderPass renderpass;
+  std::vector<vk::ImageView> imageViews;
+  std::vector<vk::Framebuffer> framebuffers;
 
   Context
     (GLFWwindow *window,
@@ -36,7 +39,10 @@ private:
      vk::DebugUtilsMessengerEXT messenger,
      vk::SurfaceKHR surface,
      vk::Device device,
-     vk::SwapchainKHR swapchain
+     vk::SwapchainKHR swapchain,
+     vk::RenderPass renderpass,
+     std::vector<vk::ImageView> imageViews,
+     std::vector<vk::Framebuffer> framebuffers
      ) {
 
     this->instance = instance;
@@ -46,10 +52,22 @@ private:
     this->messenger = messenger;
     this->device = device;
     this->swapchain = swapchain;
+    this->renderpass = renderpass;
+    this->imageViews = imageViews;
+    this->framebuffers = framebuffers;
 
   }
 public:
   ~Context() {
+    this->device.waitIdle();
+
+    for (auto &f : this->framebuffers) {
+      this->device.destroyFramebuffer(f);
+    }
+    for (auto &i : this->imageViews) {
+      this->device.destroyImageView(i);
+    }
+    this->device.destroyRenderPass(this->renderpass);
     this->device.destroySwapchainKHR(this->swapchain, nullptr, this->loader);
     this->device.destroy();
     this->instance.destroySurfaceKHR(this->surface);
@@ -127,13 +145,10 @@ public:
     std::vector<vk::QueueFamilyProperties> queueFamilies =
       physicalDevice.getQueueFamilyProperties();
 
-    // VkSurfaceKHR *_surface = (VkSurfaceKHR*) malloc(sizeof(VkSurfaceKHR));
     VkSurfaceKHR _surface;
-    // if (VK_SUCCESS != glfwCreateWindowSurface(instance, window, NULL, _surface)) {
     if (VK_SUCCESS != glfwCreateWindowSurface(instance, window, NULL, &_surface)) {
       throw std::runtime_error("couldn't create surface");
     }
-    // vk::SurfaceKHR surface = *_surface;
     vk::SurfaceKHR surface(_surface);
 
     std::vector<uint32_t> graphicsQfIxs, presentQfIxs;
@@ -248,7 +263,91 @@ public:
        nullptr);
     vk::SwapchainKHR swapchain = device.createSwapchainKHR(swapchainInfo, nullptr, loader);
 
-    Context context = Context(window, instance, loader, messenger, surface, device, swapchain);
+    vk::AttachmentDescription colorAttachment
+      ({},
+       swapchainFormat,
+       vk::SampleCountFlagBits::e1,
+       vk::AttachmentLoadOp::eClear,
+       vk::AttachmentStoreOp::eStore,
+       vk::AttachmentLoadOp::eDontCare,
+       vk::AttachmentStoreOp::eDontCare,
+       vk::ImageLayout::eUndefined,
+       vk::ImageLayout::ePresentSrcKHR);
+
+    std::vector<vk::AttachmentReference> colorAttachments =
+      { vk::AttachmentReference(0, vk::ImageLayout::eColorAttachmentOptimal)
+      };
+
+    vk::SubpassDescription subpass
+      ({},
+       vk::PipelineBindPoint::eGraphics,
+       0, nullptr,
+       colorAttachments.size(), colorAttachments.data(), nullptr,
+       nullptr,
+       0, nullptr);
+
+    vk::SubpassDependency subpassDep
+      (VK_SUBPASS_EXTERNAL,
+       0,
+       vk::PipelineStageFlagBits::eColorAttachmentOutput,
+       vk::PipelineStageFlagBits::eColorAttachmentOutput,
+       {},
+       vk::AccessFlagBits::eColorAttachmentRead | vk::AccessFlagBits::eColorAttachmentWrite,
+       {});
+
+    std::vector<vk::AttachmentDescription> attachmentDescs = { colorAttachment };
+    std::vector<vk::SubpassDescription> subpasses = { subpass };
+    std::vector<vk::SubpassDependency> subpassDeps = { subpassDep };
+    vk::RenderPassCreateInfo renderpassInfo
+      ({},
+       attachmentDescs.size(), attachmentDescs.data(),
+       subpasses.size(), subpasses.data(),
+       subpassDeps.size(), subpassDeps.data());
+
+    vk::RenderPass renderpass = device.createRenderPass(renderpassInfo);
+
+    std::vector<vk::Image> images = device.getSwapchainImagesKHR(swapchain, loader);
+    std::vector<vk::ImageView> imageViews(images.size());
+    for (size_t i = 0; i < images.size(); ++i) {
+      vk::ImageViewCreateInfo imageViewInfo
+        ({},
+         images[i],
+         vk::ImageViewType::e2D,
+         swapchainFormat,
+         vk::ComponentMapping
+           (vk::ComponentSwizzle::eIdentity,
+            vk::ComponentSwizzle::eIdentity,
+            vk::ComponentSwizzle::eIdentity,
+            vk::ComponentSwizzle::eIdentity),
+         vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1)
+         );
+      imageViews[i] = device.createImageView(imageViewInfo);
+    }
+
+    std::vector<vk::Framebuffer> framebuffers(images.size());
+    for (size_t i = 0; i < imageViews.size(); ++i) {
+      vk::FramebufferCreateInfo framebufferInfo
+        ({},
+         renderpass,
+         1, &imageViews[i],
+         swapchainExtent.width, swapchainExtent.height,
+         1);
+
+      framebuffers[i] = device.createFramebuffer(framebufferInfo);
+    }
+
+    Context context =
+      Context
+        (window,
+         instance,
+         loader,
+         messenger,
+         surface,
+         device,
+         swapchain,
+         renderpass,
+         imageViews,
+         framebuffers);
     return context;
   }
 
