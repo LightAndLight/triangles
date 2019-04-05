@@ -1,5 +1,6 @@
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
+#define VULKAN_HPP_TYPESAFE_CONVERSION
 #include <vulkan/vulkan.hpp>
 
 #include <iostream>
@@ -26,6 +27,7 @@ private:
   vk::DispatchLoaderDynamic loader;
   vk::DebugUtilsMessengerEXT messenger;
   vk::Device device;
+  vk::SwapchainKHR swapchain;
 
   Context
     (GLFWwindow *window,
@@ -33,7 +35,8 @@ private:
      vk::DispatchLoaderDynamic loader,
      vk::DebugUtilsMessengerEXT messenger,
      vk::SurfaceKHR surface,
-     vk::Device device
+     vk::Device device,
+     vk::SwapchainKHR swapchain
      ) {
 
     this->instance = instance;
@@ -42,9 +45,20 @@ private:
     this->loader = loader;
     this->messenger = messenger;
     this->device = device;
+    this->swapchain = swapchain;
 
   }
 public:
+  ~Context() {
+    this->device.destroySwapchainKHR(this->swapchain, nullptr, this->loader);
+    this->device.destroy();
+    this->instance.destroySurfaceKHR(this->surface);
+    this->instance.destroyDebugUtilsMessengerEXT(this->messenger, nullptr, this->loader);
+    this->instance.destroy();
+    glfwDestroyWindow(this->window);
+    glfwTerminate();
+  }
+
   static vk::Optional<Context> create(uint32_t w, uint32_t h, const char *title) {
     if (GLFW_FALSE == glfwInit()) {
       throw std::runtime_error("failed to initialize glfw");
@@ -113,10 +127,14 @@ public:
     std::vector<vk::QueueFamilyProperties> queueFamilies =
       physicalDevice.getQueueFamilyProperties();
 
-    VkSurfaceKHR surface;
-    if (VK_SUCCESS != glfwCreateWindowSurface(instance, window, NULL, &surface)) {
+    // VkSurfaceKHR *_surface = (VkSurfaceKHR*) malloc(sizeof(VkSurfaceKHR));
+    VkSurfaceKHR _surface;
+    // if (VK_SUCCESS != glfwCreateWindowSurface(instance, window, NULL, _surface)) {
+    if (VK_SUCCESS != glfwCreateWindowSurface(instance, window, NULL, &_surface)) {
       throw std::runtime_error("couldn't create surface");
     }
+    // vk::SurfaceKHR surface = *_surface;
+    vk::SurfaceKHR surface(_surface);
 
     std::vector<uint32_t> graphicsQfIxs, presentQfIxs;
     for (uint32_t i = 0; i < queueFamilies.size(); ++i) {
@@ -149,11 +167,13 @@ public:
     }
 
     vk::PhysicalDeviceFeatures features = physicalDevice.getFeatures();
+    std::vector<const char*> deviceExtensions = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
+
     vk::DeviceCreateInfo deviceInfo
       ({},
        queueInfos.size(), queueInfos.data(),
        0, nullptr,
-       0, nullptr,
+       deviceExtensions.size(), deviceExtensions.data(),
        &features);
     vk::Device device = physicalDevice.createDevice(deviceInfo);
 
@@ -228,21 +248,12 @@ public:
        nullptr);
     vk::SwapchainKHR swapchain = device.createSwapchainKHR(swapchainInfo, nullptr, loader);
 
-    Context context = Context(window, instance, loader, messenger, surface, device);
+    Context context = Context(window, instance, loader, messenger, surface, device, swapchain);
     return context;
   }
 
   vk::Instance getInstance() {
     return this->instance;
-  }
-
-  ~Context() {
-    this->device.destroy();
-    this->instance.destroySurfaceKHR(this->surface);
-    this->instance.destroyDebugUtilsMessengerEXT(this->messenger, nullptr, this->loader);
-    this->instance.destroy();
-    glfwDestroyWindow(this->window);
-    glfwTerminate();
   }
 };
 
