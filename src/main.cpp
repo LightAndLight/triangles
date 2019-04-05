@@ -45,7 +45,7 @@ private:
 
   }
 public:
-  static vk::Optional<Context> create(int w, int h, const char *title) {
+  static vk::Optional<Context> create(uint32_t w, uint32_t h, const char *title) {
     if (GLFW_FALSE == glfwInit()) {
       throw std::runtime_error("failed to initialize glfw");
     }
@@ -160,6 +160,32 @@ public:
 
     vk::SurfaceCapabilitiesKHR capabilities = physicalDevice.getSurfaceCapabilitiesKHR(surface);
     uint32_t minImageCount = std::min(capabilities.minImageCount + 1, capabilities.maxImageCount);
+
+    std::vector<vk::SurfaceFormatKHR> formats = physicalDevice.getSurfaceFormatsKHR(surface);
+    vk::Format swapchainFormat = formats[0].format;
+    vk::ColorSpaceKHR swapchainColorSpace = formats[0].colorSpace;
+    if (formats.empty()) {
+      throw std::runtime_error("no swapchain formats");
+    }
+    for (auto &f : formats) {
+      if (vk::Format::eUndefined == f.format ||
+          (vk::Format::eB8G8R8A8Unorm == f.format &&
+           vk::ColorSpaceKHR::eSrgbNonlinear == f.colorSpace)) {
+
+        swapchainFormat = vk::Format::eB8G8R8A8Unorm;
+        swapchainColorSpace = vk::ColorSpaceKHR::eSrgbNonlinear;
+
+        break;
+      }
+    }
+
+    vk::Extent2D swapchainExtent
+      (std::max
+         (std::min(w, capabilities.minImageExtent.width),
+          capabilities.maxImageExtent.width),
+       std::max
+         (std::min(h, capabilities.minImageExtent.height),
+          capabilities.maxImageExtent.height));
 
     vk::SwapchainCreateInfoKHR swapchainInfo
       ({},
