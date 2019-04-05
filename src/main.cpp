@@ -113,11 +113,10 @@ public:
     std::vector<vk::QueueFamilyProperties> queueFamilies =
       physicalDevice.getQueueFamilyProperties();
 
-    VkSurfaceKHR _surface;
-    if (VK_SUCCESS != glfwCreateWindowSurface(instance, window, NULL, &_surface)) {
+    VkSurfaceKHR surface;
+    if (VK_SUCCESS != glfwCreateWindowSurface(instance, window, NULL, &surface)) {
       throw std::runtime_error("couldn't create surface");
     }
-    vk::SurfaceKHR surface(_surface);
 
     std::vector<uint32_t> graphicsQfIxs, presentQfIxs;
     for (uint32_t i = 0; i < queueFamilies.size(); ++i) {
@@ -159,7 +158,10 @@ public:
     vk::Device device = physicalDevice.createDevice(deviceInfo);
 
     vk::SurfaceCapabilitiesKHR capabilities = physicalDevice.getSurfaceCapabilitiesKHR(surface);
-    uint32_t minImageCount = std::min(capabilities.minImageCount + 1, capabilities.maxImageCount);
+    uint32_t minImageCount = capabilities.minImageCount + 1;
+    if (capabilities.maxImageCount > 0) {
+      minImageCount = std::min(minImageCount, capabilities.maxImageCount);
+    }
 
     std::vector<vk::SurfaceFormatKHR> formats = physicalDevice.getSurfaceFormatsKHR(surface);
     vk::Format swapchainFormat = formats[0].format;
@@ -191,11 +193,12 @@ public:
     std::vector<uint32_t> sharingIndices;
     if (graphicsQfIx == presentQfIx) {
       sharingMode = vk::SharingMode::eExclusive;
-      sharingIndices = {};
+      sharingIndices = std::vector<uint32_t>(0);
     } else {
       sharingMode = vk::SharingMode::eConcurrent;
       sharingIndices = { graphicsQfIx, presentQfIx };
     }
+    sharingIndices.data();
 
     std::vector<vk::PresentModeKHR> presentModes =
       physicalDevice.getSurfacePresentModesKHR(surface);
@@ -221,7 +224,9 @@ public:
        capabilities.currentTransform,
        vk::CompositeAlphaFlagBitsKHR::eOpaque,
        swapchainPresentMode,
-       true);
+       true,
+       nullptr);
+    vk::SwapchainKHR swapchain = device.createSwapchainKHR(swapchainInfo, nullptr, loader);
 
     Context context = Context(window, instance, loader, messenger, surface, device);
     return context;
