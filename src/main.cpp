@@ -3,6 +3,7 @@
 #define VULKAN_HPP_TYPESAFE_CONVERSION
 #include <vulkan/vulkan.hpp>
 
+#include <fstream>
 #include <iostream>
 #include <optional>
 #include <stdexcept>
@@ -31,6 +32,8 @@ private:
   vk::RenderPass renderpass;
   std::vector<vk::ImageView> imageViews;
   std::vector<vk::Framebuffer> framebuffers;
+  vk::CommandPool commandPool;
+  std::vector<vk::CommandBuffer> commandBuffers;
 
   Context
     (GLFWwindow *window,
@@ -42,7 +45,9 @@ private:
      vk::SwapchainKHR swapchain,
      vk::RenderPass renderpass,
      std::vector<vk::ImageView> imageViews,
-     std::vector<vk::Framebuffer> framebuffers
+     std::vector<vk::Framebuffer> framebuffers,
+     vk::CommandPool commandPool,
+     std::vector<vk::CommandBuffer> commandBuffers
      ) {
 
     this->instance = instance;
@@ -55,11 +60,17 @@ private:
     this->renderpass = renderpass;
     this->imageViews = imageViews;
     this->framebuffers = framebuffers;
+    this->commandPool = commandPool;
+    this->commandBuffers = commandBuffers;
 
   }
 public:
   ~Context() {
     this->device.waitIdle();
+
+    this->device.freeCommandBuffers(this->commandPool, this->commandBuffers);
+
+    this->device.destroyCommandPool(this->commandPool);
 
     for (auto &f : this->framebuffers) {
       this->device.destroyFramebuffer(f);
@@ -67,12 +78,14 @@ public:
     for (auto &i : this->imageViews) {
       this->device.destroyImageView(i);
     }
+
     this->device.destroyRenderPass(this->renderpass);
     this->device.destroySwapchainKHR(this->swapchain, nullptr, this->loader);
     this->device.destroy();
     this->instance.destroySurfaceKHR(this->surface);
     this->instance.destroyDebugUtilsMessengerEXT(this->messenger, nullptr, this->loader);
     this->instance.destroy();
+
     glfwDestroyWindow(this->window);
     glfwTerminate();
   }
@@ -336,6 +349,90 @@ public:
       framebuffers[i] = device.createFramebuffer(framebufferInfo);
     }
 
+    vk::CommandPoolCreateInfo commandPoolInfo({}, graphicsQfIx);
+    vk::CommandPool commandPool = device.createCommandPool(commandPoolInfo);
+
+    vk::CommandBufferAllocateInfo allocateInfo
+      (commandPool,
+       vk::CommandBufferLevel::ePrimary,
+       framebuffers.size());
+    std::vector<vk::CommandBuffer> commandBuffers = device.allocateCommandBuffers(allocateInfo);
+
+    std::ifstream vertexShaderFile("shaders/vert.spv", std::ios_base::binary | std::ios_base::ate);
+    if (!vertexShaderFile.is_open()) {
+      throw std::runtime_error("couldn't open vertex shader file");
+    }
+    uint32_t vertexShaderCodeSize = vertexShaderFile.tellg();
+    std::vector<char> vertexShaderData(vertexShaderCodeSize);
+    vertexShaderFile.read(vertexShaderData.data(), vertexShaderCodeSize);
+    vk::ShaderModuleCreateInfo vertexShaderInfo
+      ({},
+       vertexShaderCodeSize,
+       (uint32_t*) vertexShaderData.data());
+    vk::ShaderModule vertexShaderModule = device.createShaderModule(vertexShaderInfo);
+
+    std::ifstream fragmentShaderFile
+      ("shaders/frag.spv",
+       std::ios_base::binary | std::ios_base::ate);
+    if (!fragmentShaderFile.is_open()) {
+      throw std::runtime_error("couldn't open fragment shader file");
+    }
+    uint32_t fragmentShaderCodeSize = fragmentShaderFile.tellg();
+    std::vector<char> fragmentShaderData(fragmentShaderCodeSize);
+    fragmentShaderFile.read(fragmentShaderData.data(), fragmentShaderCodeSize);
+    vk::ShaderModuleCreateInfo fragmentShaderInfo
+      ({},
+       fragmentShaderCodeSize,
+       (uint32_t*) fragmentShaderData.data());
+    vk::ShaderModule fragmentShaderModule = device.createShaderModule(fragmentShaderInfo);
+
+    std::vector<vk::PipelineShaderStageCreateInfo> shaderStageInfos =
+      {
+       vk::PipelineShaderStageCreateInfo
+         ({},
+          vk::ShaderStageFlagBits::eVertex,
+          vertexShaderModule,
+          "main",
+          nullptr),
+
+       vk::PipelineShaderStageCreateInfo
+            ({},
+             vk::ShaderStageFlagBits::eFragment,
+             fragmentShaderModule,
+             "main",
+             nullptr)
+
+      };
+
+    vk::PipelineVertexInputStateCreateInfo vertexInputInfo({}, {}, {});
+
+    vk::PipelineInputAssemblyStateCreateInfo inputAssemblyInfo
+      ({},
+       vk::PrimitiveTopology::eTriangleList,
+       false);
+
+    vk::GraphicsPipelineCreateInfo graphicsPipelineInfo
+      ({},
+       shaderStageInfos,
+       vertexInputInfo,
+       inputAssemblyInfo,
+       nullptr,
+       viewportInfo,
+       rasterizationInfo,
+       multisampleInfo,
+       depthStencilInfo,
+       colorBlendInfo,
+       dynamicStateInfo,
+       pipelineLayout,
+       renderpass,
+       VK_NULL_HANDLE,
+       -1);
+    vk::Pipeline graphicsPipeline =
+      device.createGraphicsPipeline(nullptr, graphicsPipelineInfo);
+
+    device.destroyShaderModule(vertexShaderModule);
+    device.destroyShaderModule(fragmentShaderModule);
+
     Context context =
       Context
         (window,
@@ -347,7 +444,9 @@ public:
          swapchain,
          renderpass,
          imageViews,
-         framebuffers);
+         framebuffers,
+         commandPool,
+         commandBuffers);
     return context;
   }
 
