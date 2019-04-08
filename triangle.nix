@@ -1,5 +1,5 @@
 { stdenv, clang, vulkan-headers, vulkan-loader
-, vulkan-validation-layers, glfw
+, vulkan-validation-layers, glfw, glslang
 }:
 stdenv.mkDerivation {
     name = "triangle";
@@ -10,5 +10,6 @@ stdenv.mkDerivation {
       vulkan-loader
       vulkan-validation-layers
       glfw
+      glslang
     ];
   }

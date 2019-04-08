@@ -34,6 +34,8 @@ private:
   std::vector<vk::Framebuffer> framebuffers;
   vk::CommandPool commandPool;
   std::vector<vk::CommandBuffer> commandBuffers;
+  vk::PipelineLayout pipelineLayout;
+  vk::Pipeline pipeline;
 
   Context
     (GLFWwindow *window,
@@ -47,7 +49,9 @@ private:
      std::vector<vk::ImageView> imageViews,
      std::vector<vk::Framebuffer> framebuffers,
      vk::CommandPool commandPool,
-     std::vector<vk::CommandBuffer> commandBuffers
+     std::vector<vk::CommandBuffer> commandBuffers,
+     vk::PipelineLayout pipelineLayout,
+     vk::Pipeline pipeline
      ) {
 
     this->instance = instance;
@@ -62,11 +66,16 @@ private:
     this->framebuffers = framebuffers;
     this->commandPool = commandPool;
     this->commandBuffers = commandBuffers;
+    this->pipelineLayout = pipelineLayout;
+    this->pipeline = pipeline;
 
   }
 public:
   ~Context() {
     this->device.waitIdle();
+
+    this->device.destroyPipeline(this->pipeline);
+    this->device.destroyPipelineLayout(this->pipelineLayout);
 
     this->device.freeCommandBuffers(this->commandPool, this->commandBuffers);
 
@@ -364,6 +373,7 @@ public:
     }
     uint32_t vertexShaderCodeSize = vertexShaderFile.tellg();
     std::vector<char> vertexShaderData(vertexShaderCodeSize);
+    vertexShaderFile.seekg(0);
     vertexShaderFile.read(vertexShaderData.data(), vertexShaderCodeSize);
     vk::ShaderModuleCreateInfo vertexShaderInfo
       ({},
@@ -379,6 +389,7 @@ public:
     }
     uint32_t fragmentShaderCodeSize = fragmentShaderFile.tellg();
     std::vector<char> fragmentShaderData(fragmentShaderCodeSize);
+    fragmentShaderFile.seekg(0);
     fragmentShaderFile.read(fragmentShaderData.data(), fragmentShaderCodeSize);
     vk::ShaderModuleCreateInfo fragmentShaderInfo
       ({},
@@ -453,7 +464,7 @@ public:
            vk::BlendOp::eAdd
            )
       };
-    float blendConstants[4] = { 0.f, 0.f, 0.f, 0.f };
+    std::array<float,4> blendConstants = {{ 0, 0, 0, 0 }};
     vk::PipelineColorBlendStateCreateInfo colorBlendInfo
       ({},
        false,
@@ -462,21 +473,26 @@ public:
        colorBlendAttachments.data(),
        blendConstants);
 
+    vk::PipelineLayoutCreateInfo pipelineLayoutInfo ({}, {}, {});
+    vk::PipelineLayout pipelineLayout = device.createPipelineLayout(pipelineLayoutInfo);
+
     vk::GraphicsPipelineCreateInfo graphicsPipelineInfo
       ({},
-       shaderStageInfos,
-       vertexInputInfo,
-       inputAssemblyInfo,
+       shaderStageInfos.size(),
+       shaderStageInfos.data(),
+       &vertexInputInfo,
+       &inputAssemblyInfo,
        nullptr,
-       viewportInfo,
-       rasterizationInfo,
-       multisampleInfo,
+       &viewportInfo,
+       &rasterizationInfo,
+       &multisampleInfo,
        nullptr,
-       colorBlendInfo,
-       dynamicStateInfo,
+       &colorBlendInfo,
+       nullptr,
        pipelineLayout,
        renderpass,
-       VK_NULL_HANDLE,
+       0,
+       nullptr,
        -1);
     vk::Pipeline graphicsPipeline =
       device.createGraphicsPipeline(nullptr, graphicsPipelineInfo);
@@ -497,7 +513,9 @@ public:
          imageViews,
          framebuffers,
          commandPool,
-         commandBuffers);
+         commandBuffers,
+         pipelineLayout,
+         graphicsPipeline);
     return context;
   }
 
