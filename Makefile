@@ -1,4 +1,5 @@
-all: app
+debug: src/main.cpp shaders/vert.spv shaders/frag.spv
+	clang++ --std=c++11 -lvulkan -lglfw -g src/main.cpp -o app
 
 app: src/main.cpp shaders/vert.spv shaders/frag.spv
 	clang++ --std=c++11 -lvulkan -lglfw -O src/main.cpp -o app

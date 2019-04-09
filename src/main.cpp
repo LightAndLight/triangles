@@ -28,6 +28,8 @@ private:
   vk::DispatchLoaderDynamic loader;
   vk::DebugUtilsMessengerEXT messenger;
   vk::Device device;
+  vk::Queue graphicsQueue;
+  vk::Queue presentQueue;
   vk::SwapchainKHR swapchain;
   vk::RenderPass renderpass;
   std::vector<vk::ImageView> imageViews;
@@ -36,6 +38,8 @@ private:
   std::vector<vk::CommandBuffer> commandBuffers;
   vk::PipelineLayout pipelineLayout;
   vk::Pipeline pipeline;
+  vk::Semaphore imageAvailableSem;
+  vk::Semaphore renderFinishedSem;
 
   Context
     (GLFWwindow *window,
@@ -44,6 +48,8 @@ private:
      vk::DebugUtilsMessengerEXT messenger,
      vk::SurfaceKHR surface,
      vk::Device device,
+     vk::Queue graphicsQueue,
+     vk::Queue presentQueue,
      vk::SwapchainKHR swapchain,
      vk::RenderPass renderpass,
      std::vector<vk::ImageView> imageViews,
@@ -51,7 +57,9 @@ private:
      vk::CommandPool commandPool,
      std::vector<vk::CommandBuffer> commandBuffers,
      vk::PipelineLayout pipelineLayout,
-     vk::Pipeline pipeline
+     vk::Pipeline pipeline,
+     vk::Semaphore imageAvailableSem,
+     vk::Semaphore renderFinishedSem
      ) {
 
     this->instance = instance;
@@ -60,6 +68,8 @@ private:
     this->loader = loader;
     this->messenger = messenger;
     this->device = device;
+    this->graphicsQueue = graphicsQueue;
+    this->presentQueue = presentQueue;
     this->swapchain = swapchain;
     this->renderpass = renderpass;
     this->imageViews = imageViews;
@@ -68,11 +78,16 @@ private:
     this->commandBuffers = commandBuffers;
     this->pipelineLayout = pipelineLayout;
     this->pipeline = pipeline;
+    this->imageAvailableSem = imageAvailableSem;
+    this->renderFinishedSem = renderFinishedSem;
 
   }
 public:
   ~Context() {
     this->device.waitIdle();
+
+    this->device.destroySemaphore(this->renderFinishedSem);
+    this->device.destroySemaphore(this->imageAvailableSem);
 
     this->device.destroyPipeline(this->pipeline);
     this->device.destroyPipelineLayout(this->pipelineLayout);
@@ -97,6 +112,55 @@ public:
 
     glfwDestroyWindow(this->window);
     glfwTerminate();
+  }
+
+  bool shouldClose() const {
+    return glfwWindowShouldClose(this->window);
+  }
+
+  void drawFrame() const {
+    vk::ResultValue<uint32_t> o_ix =
+      this->device.acquireNextImageKHR
+        (this->swapchain,
+         std::numeric_limits<uint64_t>::max(),
+         imageAvailableSem,
+         vk::Fence(),
+         this->loader);
+
+    if (o_ix.result != vk::Result::eSuccess) {
+      throw std::runtime_error(vk::to_string(o_ix.result));
+    }
+
+    uint32_t ix = o_ix.value;
+
+    std::vector<vk::Semaphore> waitSemaphores =
+      { imageAvailableSem };
+    std::vector<vk::PipelineStageFlags> waitMasks =
+      { vk::PipelineStageFlagBits::eColorAttachmentOutput };
+    std::vector<vk::CommandBuffer> submitBuffers =
+      { this->commandBuffers[ix] };
+    std::vector<vk::Semaphore> signalSemaphores =
+      { renderFinishedSem };
+    vk::SubmitInfo submitInfo
+      (waitSemaphores.size(),
+       waitSemaphores.data(),
+       waitMasks.data(),
+       submitBuffers.size(),
+       submitBuffers.data(),
+       signalSemaphores.size(),
+       signalSemaphores.data());
+
+    this->graphicsQueue.submit({ submitInfo }, nullptr);
+
+    vk::PresentInfoKHR presentInfo
+      (signalSemaphores.size(),
+       signalSemaphores.data(),
+       1,
+       &(this->swapchain),
+       &ix);
+
+    this->presentQueue.presentKHR(presentInfo, this->loader);
+
   }
 
   static vk::Optional<Context> create(uint32_t w, uint32_t h, const char *title) {
@@ -212,7 +276,10 @@ public:
        0, nullptr,
        deviceExtensions.size(), deviceExtensions.data(),
        &features);
-    vk::Device device = physicalDevice.createDevice(deviceInfo);
+    vk::Device device = physicalDevice.createDevice(deviceInfo, nullptr, loader);
+
+    vk::Queue graphicsQueue = device.getQueue(graphicsQfIx, 0);
+    vk::Queue presentQueue = device.getQueue(presentQfIx, 0);
 
     vk::SurfaceCapabilitiesKHR capabilities = physicalDevice.getSurfaceCapabilitiesKHR(surface);
     uint32_t minImageCount = capabilities.minImageCount + 1;
@@ -500,6 +567,34 @@ public:
     device.destroyShaderModule(vertexShaderModule);
     device.destroyShaderModule(fragmentShaderModule);
 
+    for (size_t i = 0; i < commandBuffers.size(); ++i) {
+      auto &c = commandBuffers[i];
+      vk::CommandBufferBeginInfo beginInfo({}, nullptr);
+      c.begin(beginInfo);
+
+      std::vector<vk::ClearValue> clearValues =
+        { vk::ClearValue().setColor(vk::ClearColorValue().setFloat32({{ 0, 0, 0, 1 }}))
+        };
+      vk::RenderPassBeginInfo renderpassBeginInfo
+        (renderpass,
+         framebuffers[i],
+         vk::Rect2D(vk::Offset2D(0, 0), swapchainExtent),
+         clearValues.size(),
+         clearValues.data()
+         );
+      c.beginRenderPass(renderpassBeginInfo, vk::SubpassContents::eInline);
+
+      c.bindPipeline(vk::PipelineBindPoint::eGraphics, graphicsPipeline);
+      c.draw(3, 1, 0, 0);
+
+      c.endRenderPass();
+
+      c.end();
+    }
+
+    vk::Semaphore imageAvailableSem = device.createSemaphore(vk::SemaphoreCreateInfo());
+    vk::Semaphore renderFinishedSem = device.createSemaphore(vk::SemaphoreCreateInfo());
+
     Context context =
       Context
         (window,
@@ -508,6 +603,8 @@ public:
          messenger,
          surface,
          device,
+         graphicsQueue,
+         presentQueue,
          swapchain,
          renderpass,
          imageViews,
@@ -515,17 +612,21 @@ public:
          commandPool,
          commandBuffers,
          pipelineLayout,
-         graphicsPipeline);
+         graphicsPipeline,
+         imageAvailableSem,
+         renderFinishedSem);
     return context;
-  }
-
-  vk::Instance getInstance() {
-    return this->instance;
   }
 };
 
 int main() {
   vk::Optional<Context> context = Context::create(1280, 960, "triangle");
+
+  while (!context->shouldClose()) {
+    glfwPollEvents();
+
+    context->drawFrame();
+  }
 
   return 0;
 }
