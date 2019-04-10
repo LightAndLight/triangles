@@ -121,9 +121,10 @@ public:
   void drawFrame() const {
     vk::ResultValue<uint32_t> o_ix =
       this->device.acquireNextImageKHR
+        <vk::DispatchLoaderDynamic>
         (this->swapchain,
          std::numeric_limits<uint64_t>::max(),
-         imageAvailableSem,
+         this->imageAvailableSem,
          vk::Fence(),
          this->loader);
 
@@ -217,7 +218,7 @@ public:
        nullptr
        );
 
-    vk::DebugUtilsMessengerEXT messenger = //instance.createDebugUtilsMessengerEXT(messengerInfo);
+    vk::DebugUtilsMessengerEXT messenger =
       instance.createDebugUtilsMessengerEXT(messengerInfo, nullptr, loader);
 
     std::vector<vk::PhysicalDevice> devices = instance.enumeratePhysicalDevices();
@@ -243,7 +244,7 @@ public:
         graphicsQfIxs.push_back(i);
       }
 
-      if (physicalDevice.getSurfaceSupportKHR(i, surface)) {
+      if (physicalDevice.getSurfaceSupportKHR(i, surface, loader)) {
         presentQfIxs.push_back(i);
       }
     }
@@ -281,13 +282,15 @@ public:
     vk::Queue graphicsQueue = device.getQueue(graphicsQfIx, 0);
     vk::Queue presentQueue = device.getQueue(presentQfIx, 0);
 
-    vk::SurfaceCapabilitiesKHR capabilities = physicalDevice.getSurfaceCapabilitiesKHR(surface);
+    vk::SurfaceCapabilitiesKHR capabilities =
+      physicalDevice.getSurfaceCapabilitiesKHR(surface, loader);
     uint32_t minImageCount = capabilities.minImageCount + 1;
     if (capabilities.maxImageCount > 0) {
       minImageCount = std::min(minImageCount, capabilities.maxImageCount);
     }
 
-    std::vector<vk::SurfaceFormatKHR> formats = physicalDevice.getSurfaceFormatsKHR(surface);
+    std::vector<vk::SurfaceFormatKHR> formats =
+      physicalDevice.getSurfaceFormatsKHR(surface, loader);
     vk::Format swapchainFormat = formats[0].format;
     vk::ColorSpaceKHR swapchainColorSpace = formats[0].colorSpace;
     if (formats.empty()) {
@@ -306,11 +309,11 @@ public:
     }
 
     vk::Extent2D swapchainExtent
-      (std::max
-         (std::min(w, capabilities.minImageExtent.width),
+      (std::min
+         (std::max(w, capabilities.minImageExtent.width),
           capabilities.maxImageExtent.width),
-       std::max
-         (std::min(h, capabilities.minImageExtent.height),
+       std::min
+         (std::max(h, capabilities.minImageExtent.height),
           capabilities.maxImageExtent.height));
 
     vk::SharingMode sharingMode;
@@ -322,14 +325,14 @@ public:
       sharingMode = vk::SharingMode::eConcurrent;
       sharingIndices = { graphicsQfIx, presentQfIx };
     }
-    sharingIndices.data();
 
     std::vector<vk::PresentModeKHR> presentModes =
-      physicalDevice.getSurfacePresentModesKHR(surface);
+      physicalDevice.getSurfacePresentModesKHR(surface, loader);
     vk::PresentModeKHR swapchainPresentMode = vk::PresentModeKHR::eFifo;
     for (auto &pm : presentModes) {
       if (vk::PresentModeKHR::eMailbox == pm) {
         swapchainPresentMode = pm;
+        break;
       }
     }
 
