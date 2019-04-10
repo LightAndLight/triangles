@@ -22,14 +22,22 @@ VkBool32 messengerCallback
 
 class Context {
 private:
-  vk::Instance instance;
   GLFWwindow *window;
+  uint32_t width;
+  uint32_t height;
+  const char *title;
+  vk::Instance instance;
   vk::SurfaceKHR surface;
   vk::DispatchLoaderDynamic loader;
   vk::DebugUtilsMessengerEXT messenger;
+  vk::PhysicalDevice physicalDevice;
   vk::Device device;
+  uint32_t *graphicsQfIx;
+  uint32_t *presentQfIx;
   vk::Queue graphicsQueue;
   vk::Queue presentQueue;
+  vk::Format swapchainFormat;
+  vk::Extent2D swapchainExtent;
   vk::SwapchainKHR swapchain;
   vk::RenderPass renderpass;
   std::vector<vk::ImageView> imageViews;
@@ -41,76 +49,70 @@ private:
   vk::Semaphore imageAvailableSem;
   vk::Semaphore renderFinishedSem;
 
-  Context
-    (GLFWwindow *window,
-     vk::Instance instance,
-     vk::DispatchLoaderDynamic loader,
-     vk::DebugUtilsMessengerEXT messenger,
-     vk::SurfaceKHR surface,
-     vk::Device device,
-     vk::Queue graphicsQueue,
-     vk::Queue presentQueue,
-     vk::SwapchainKHR swapchain,
-     vk::RenderPass renderpass,
-     std::vector<vk::ImageView> imageViews,
-     std::vector<vk::Framebuffer> framebuffers,
-     vk::CommandPool commandPool,
-     std::vector<vk::CommandBuffer> commandBuffers,
-     vk::PipelineLayout pipelineLayout,
-     vk::Pipeline pipeline,
-     vk::Semaphore imageAvailableSem,
-     vk::Semaphore renderFinishedSem
-     ) {
 
-    this->instance = instance;
-    this->window = window;
-    this->surface = surface;
-    this->loader = loader;
-    this->messenger = messenger;
-    this->device = device;
-    this->graphicsQueue = graphicsQueue;
-    this->presentQueue = presentQueue;
-    this->swapchain = swapchain;
-    this->renderpass = renderpass;
-    this->imageViews = imageViews;
-    this->framebuffers = framebuffers;
-    this->commandPool = commandPool;
-    this->commandBuffers = commandBuffers;
-    this->pipelineLayout = pipelineLayout;
-    this->pipeline = pipeline;
-    this->imageAvailableSem = imageAvailableSem;
-    this->renderFinishedSem = renderFinishedSem;
-
-  }
 public:
+  Context() { }
+
   ~Context() {
-    this->device.waitIdle();
+    if (this->graphicsQfIx) free(this->graphicsQfIx);
+    if (this->presentQfIx) free(this->presentQfIx);
 
-    this->device.destroySemaphore(this->renderFinishedSem);
-    this->device.destroySemaphore(this->imageAvailableSem);
+    if (this->device) {
 
-    this->device.destroyPipeline(this->pipeline);
-    this->device.destroyPipelineLayout(this->pipelineLayout);
+      this->device.waitIdle();
 
-    this->device.freeCommandBuffers(this->commandPool, this->commandBuffers);
+      if (this->renderFinishedSem)
+        this->device.destroySemaphore(this->renderFinishedSem);
 
-    this->device.destroyCommandPool(this->commandPool);
+      if (this->imageAvailableSem)
+        this->device.destroySemaphore(this->imageAvailableSem);
 
-    for (auto &f : this->framebuffers) {
-      this->device.destroyFramebuffer(f);
+      if (this->pipeline)
+        this->device.destroyPipeline(this->pipeline);
+
+      if (this->pipelineLayout)
+        this->device.destroyPipelineLayout(this->pipelineLayout);
+
+      if (this->commandPool) {
+
+        if (!this->commandBuffers.empty())
+          this->device.freeCommandBuffers(this->commandPool, this->commandBuffers);
+
+        this->device.destroyCommandPool(this->commandPool);
+
+      }
+
+      for (auto &f : this->framebuffers) {
+        this->device.destroyFramebuffer(f);
+      }
+      for (auto &i : this->imageViews) {
+        this->device.destroyImageView(i);
+      }
+
+      if (this->renderpass)
+        this->device.destroyRenderPass(this->renderpass);
+
+      if (this->swapchain)
+        this->device.destroySwapchainKHR(this->swapchain, nullptr, this->loader);
+      this->device.destroy();
+
     }
-    for (auto &i : this->imageViews) {
-      this->device.destroyImageView(i);
+
+    if (this->instance) {
+
+      this->instance.destroySurfaceKHR(this->surface);
+      if (this->messenger)
+        this->instance.destroyDebugUtilsMessengerEXT(this->messenger, nullptr, this->loader);
+      this->instance.destroy();
+
     }
 
-    this->device.destroyRenderPass(this->renderpass);
-    this->device.destroySwapchainKHR(this->swapchain, nullptr, this->loader);
-    this->device.destroy();
-    this->instance.destroySurfaceKHR(this->surface);
-    this->instance.destroyDebugUtilsMessengerEXT(this->messenger, nullptr, this->loader);
-    this->instance.destroy();
+    if (this->window) {
 
-    glfwDestroyWindow(this->window);
+      glfwDestroyWindow(this->window);
+
+    }
+
     glfwTerminate();
   }
 
@@ -119,6 +121,13 @@ public:
   }
 
   void drawFrame() const {
+    assert(this->device);
+    assert(this->imageAvailableSem);
+    assert(this->swapchain);
+    assert(!this->commandBuffers.empty());
+    assert(this->graphicsQueue);
+    assert(this->presentQueue);
+
     vk::ResultValue<uint32_t> o_ix =
       this->device.acquireNextImageKHR
         <vk::DispatchLoaderDynamic>
@@ -164,7 +173,7 @@ public:
 
   }
 
-  static vk::Optional<Context> create(uint32_t w, uint32_t h, const char *title) {
+  void initWindow(uint32_t w, uint32_t h, const char *title) {
     if (GLFW_FALSE == glfwInit()) {
       throw std::runtime_error("failed to initialize glfw");
     }
@@ -173,7 +182,15 @@ public:
       throw std::runtime_error("vulkan not supported");
     }
 
-    GLFWwindow *window = glfwCreateWindow(w, h, title, nullptr, nullptr);
+    this->width = w;
+    this->height = h;
+    this->title = title;
+    this->window = glfwCreateWindow(w, h, title, nullptr, nullptr);
+  }
+
+  void initInstance() {
+    assert(this->title);
+    assert(this->window);
 
     std::vector<const char*> layers =
       { "VK_LAYER_LUNARG_standard_validation"
@@ -186,7 +203,7 @@ public:
     requiredExts.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
 
     vk::ApplicationInfo appInfo
-      (title,
+      (this->title,
        VK_MAKE_VERSION(1,0,0),
        "No engine",
        VK_MAKE_VERSION(1,0,0),
@@ -200,8 +217,13 @@ public:
        requiredExts.size(), requiredExts.data()
        );
 
-    vk::Instance instance = vk::createInstance(instanceInfo);
-    vk::DispatchLoaderDynamic loader(instance);
+    this->instance = vk::createInstance(instanceInfo);
+
+    this->loader = vk::DispatchLoaderDynamic(instance);
+  }
+
+  void initDebugMessenger() {
+    assert(this->instance);
 
     vk::DebugUtilsMessengerCreateInfoEXT messengerInfo
       ({},
@@ -218,25 +240,28 @@ public:
        nullptr
        );
 
-    vk::DebugUtilsMessengerEXT messenger =
-      instance.createDebugUtilsMessengerEXT(messengerInfo, nullptr, loader);
+    this->messenger =
+      instance.createDebugUtilsMessengerEXT(messengerInfo, nullptr, this->loader);
+  }
 
-    std::vector<vk::PhysicalDevice> devices = instance.enumeratePhysicalDevices();
+  void getPhysicalDevice() {
+    assert(this->instance);
+
+    std::vector<vk::PhysicalDevice> devices = this->instance.enumeratePhysicalDevices();
 
     if (devices.empty()) {
       throw std::runtime_error("no physical devices");
     }
 
-    vk::PhysicalDevice physicalDevice = devices[0];
+    this->physicalDevice = devices[0];
+  }
+
+  void getQueueIndices() {
+    assert(this->physicalDevice);
+    assert(this->surface);
 
     std::vector<vk::QueueFamilyProperties> queueFamilies =
-      physicalDevice.getQueueFamilyProperties();
-
-    VkSurfaceKHR _surface;
-    if (VK_SUCCESS != glfwCreateWindowSurface(instance, window, NULL, &_surface)) {
-      throw std::runtime_error("couldn't create surface");
-    }
-    vk::SurfaceKHR surface(_surface);
+      this->physicalDevice.getQueueFamilyProperties();
 
     std::vector<uint32_t> graphicsQfIxs, presentQfIxs;
     for (uint32_t i = 0; i < queueFamilies.size(); ++i) {
@@ -244,7 +269,7 @@ public:
         graphicsQfIxs.push_back(i);
       }
 
-      if (physicalDevice.getSurfaceSupportKHR(i, surface, loader)) {
+      if (this->physicalDevice.getSurfaceSupportKHR(i, this->surface, this->loader)) {
         presentQfIxs.push_back(i);
       }
     }
@@ -257,18 +282,29 @@ public:
       throw std::runtime_error("no present queues");
     }
 
-    uint32_t graphicsQfIx = graphicsQfIxs[0];
-    uint32_t presentQfIx = presentQfIxs[0];
+    this->graphicsQfIx = (uint32_t*) malloc(sizeof(uint32_t));
+    *this->graphicsQfIx = graphicsQfIxs[0];
 
-    std::unordered_set<uint32_t> ixs = { graphicsQfIx, presentQfIx };
+    this->presentQfIx = (uint32_t*) malloc(sizeof(uint32_t));
+    *this->presentQfIx = presentQfIxs[0];
+  }
+
+  void initDevice() {
+    assert(this->graphicsQfIx);
+    assert(this->presentQfIx);
+    assert(this->physicalDevice);
+
+    std::unordered_set<uint32_t> ixs = { *this->graphicsQfIx, *this->presentQfIx };
 
     std::vector<vk::DeviceQueueCreateInfo> queueInfos(ixs.size());
-    for (size_t i = 0; i < ixs.size(); ++i) {
+    size_t ix = 0;
+    for (auto it = ixs.begin(); it != ixs.end(); ++it) {
       const float priorities = 1.0;
-      queueInfos[i] = vk::DeviceQueueCreateInfo({}, i, 1, &priorities);
+      queueInfos[ix] = vk::DeviceQueueCreateInfo({}, *it, 1, &priorities);
+      ++ix;
     }
 
-    vk::PhysicalDeviceFeatures features = physicalDevice.getFeatures();
+    vk::PhysicalDeviceFeatures features = this->physicalDevice.getFeatures();
     std::vector<const char*> deviceExtensions = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
 
     vk::DeviceCreateInfo deviceInfo
@@ -277,21 +313,44 @@ public:
        0, nullptr,
        deviceExtensions.size(), deviceExtensions.data(),
        &features);
-    vk::Device device = physicalDevice.createDevice(deviceInfo, nullptr, loader);
+    this->device = this->physicalDevice.createDevice(deviceInfo, nullptr, this->loader);
+  }
 
-    vk::Queue graphicsQueue = device.getQueue(graphicsQfIx, 0);
-    vk::Queue presentQueue = device.getQueue(presentQfIx, 0);
+  void getSurface() {
+    assert(this->window);
+    assert(this->instance);
+    VkSurfaceKHR _surface;
+    if (VK_SUCCESS != glfwCreateWindowSurface(this->instance, this->window, NULL, &_surface)) {
+      throw std::runtime_error("couldn't create surface");
+    }
+    this->surface = _surface;
+  }
+
+  void getQueues() {
+    assert(this->graphicsQfIx);
+    assert(this->presentQfIx);
+    assert(this->device);
+    this->graphicsQueue = this->device.getQueue(*this->graphicsQfIx, 0);
+    this->presentQueue = this->device.getQueue(*this->presentQfIx, 0);
+  }
+
+  void initSwapchain() {
+    assert(this->physicalDevice);
+    assert(this->surface);
+    assert(this->window);
 
     vk::SurfaceCapabilitiesKHR capabilities =
-      physicalDevice.getSurfaceCapabilitiesKHR(surface, loader);
+      this->physicalDevice.getSurfaceCapabilitiesKHR(this->surface, this->loader);
     uint32_t minImageCount = capabilities.minImageCount + 1;
     if (capabilities.maxImageCount > 0) {
       minImageCount = std::min(minImageCount, capabilities.maxImageCount);
     }
 
     std::vector<vk::SurfaceFormatKHR> formats =
-      physicalDevice.getSurfaceFormatsKHR(surface, loader);
-    vk::Format swapchainFormat = formats[0].format;
+      this->physicalDevice.getSurfaceFormatsKHR(this->surface, this->loader);
+
+    this->swapchainFormat = formats[0].format;
+
     vk::ColorSpaceKHR swapchainColorSpace = formats[0].colorSpace;
     if (formats.empty()) {
       throw std::runtime_error("no swapchain formats");
@@ -301,33 +360,34 @@ public:
           (vk::Format::eB8G8R8A8Unorm == f.format &&
            vk::ColorSpaceKHR::eSrgbNonlinear == f.colorSpace)) {
 
-        swapchainFormat = vk::Format::eB8G8R8A8Unorm;
+        this->swapchainFormat = vk::Format::eB8G8R8A8Unorm;
         swapchainColorSpace = vk::ColorSpaceKHR::eSrgbNonlinear;
 
         break;
       }
     }
 
-    vk::Extent2D swapchainExtent
+    this->swapchainExtent =
+      vk::Extent2D
       (std::min
-         (std::max(w, capabilities.minImageExtent.width),
+         (std::max(this->width, capabilities.minImageExtent.width),
           capabilities.maxImageExtent.width),
        std::min
-         (std::max(h, capabilities.minImageExtent.height),
+         (std::max(this->height, capabilities.minImageExtent.height),
           capabilities.maxImageExtent.height));
 
     vk::SharingMode sharingMode;
     std::vector<uint32_t> sharingIndices;
-    if (graphicsQfIx == presentQfIx) {
+    if (*this->graphicsQfIx == *this->presentQfIx) {
       sharingMode = vk::SharingMode::eExclusive;
       sharingIndices = std::vector<uint32_t>(0);
     } else {
       sharingMode = vk::SharingMode::eConcurrent;
-      sharingIndices = { graphicsQfIx, presentQfIx };
+      sharingIndices = { *this->graphicsQfIx, *this->presentQfIx };
     }
 
     std::vector<vk::PresentModeKHR> presentModes =
-      physicalDevice.getSurfacePresentModesKHR(surface, loader);
+      this->physicalDevice.getSurfacePresentModesKHR(this->surface, this->loader);
     vk::PresentModeKHR swapchainPresentMode = vk::PresentModeKHR::eFifo;
     for (auto &pm : presentModes) {
       if (vk::PresentModeKHR::eMailbox == pm) {
@@ -340,9 +400,9 @@ public:
       ({},
        surface,
        minImageCount,
-       swapchainFormat,
+       this->swapchainFormat,
        swapchainColorSpace,
-       swapchainExtent,
+       this->swapchainExtent,
        1,
        vk::ImageUsageFlagBits::eColorAttachment,
        sharingMode,
@@ -353,11 +413,17 @@ public:
        swapchainPresentMode,
        true,
        nullptr);
-    vk::SwapchainKHR swapchain = device.createSwapchainKHR(swapchainInfo, nullptr, loader);
+
+    this->swapchain = this->device.createSwapchainKHR(swapchainInfo, nullptr, this->loader);
+  }
+
+  void initRenderPass() {
+    assert(this->device);
+    assert(this->swapchain);
 
     vk::AttachmentDescription colorAttachment
       ({},
-       swapchainFormat,
+       this->swapchainFormat,
        vk::SampleCountFlagBits::e1,
        vk::AttachmentLoadOp::eClear,
        vk::AttachmentStoreOp::eStore,
@@ -396,10 +462,18 @@ public:
        subpasses.size(), subpasses.data(),
        subpassDeps.size(), subpassDeps.data());
 
-    vk::RenderPass renderpass = device.createRenderPass(renderpassInfo);
+    this->renderpass = this->device.createRenderPass(renderpassInfo);
+  }
 
-    std::vector<vk::Image> images = device.getSwapchainImagesKHR(swapchain, loader);
-    std::vector<vk::ImageView> imageViews(images.size());
+  void initImageViews() {
+    assert(this->device);
+    assert(this->swapchain);
+
+    std::vector<vk::Image> images =
+      this->device.getSwapchainImagesKHR(this->swapchain, this->loader);
+
+    this->imageViews = std::vector<vk::ImageView>(images.size());
+
     for (size_t i = 0; i < images.size(); ++i) {
       vk::ImageViewCreateInfo imageViewInfo
         ({},
@@ -407,65 +481,108 @@ public:
          vk::ImageViewType::e2D,
          swapchainFormat,
          vk::ComponentMapping
-           (vk::ComponentSwizzle::eIdentity,
-            vk::ComponentSwizzle::eIdentity,
-            vk::ComponentSwizzle::eIdentity,
-            vk::ComponentSwizzle::eIdentity),
+         (vk::ComponentSwizzle::eIdentity,
+          vk::ComponentSwizzle::eIdentity,
+          vk::ComponentSwizzle::eIdentity,
+          vk::ComponentSwizzle::eIdentity),
          vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1)
          );
-      imageViews[i] = device.createImageView(imageViewInfo);
+      this->imageViews[i] = this->device.createImageView(imageViewInfo);
     }
+  }
 
-    std::vector<vk::Framebuffer> framebuffers(images.size());
-    for (size_t i = 0; i < imageViews.size(); ++i) {
+  void initFramebuffers() {
+    assert(this->device);
+    assert(this->swapchain);
+    assert(this->renderpass);
+    assert(!this->imageViews.empty());
+
+    size_t count = this->imageViews.size();
+    this->framebuffers = std::vector<vk::Framebuffer>(count);
+    for (size_t i = 0; i < count; ++i) {
       vk::FramebufferCreateInfo framebufferInfo
         ({},
-         renderpass,
+         this->renderpass,
          1, &imageViews[i],
-         swapchainExtent.width, swapchainExtent.height,
+         this->swapchainExtent.width, this->swapchainExtent.height,
          1);
 
-      framebuffers[i] = device.createFramebuffer(framebufferInfo);
+      this->framebuffers[i] = this->device.createFramebuffer(framebufferInfo);
     }
+  }
 
-    vk::CommandPoolCreateInfo commandPoolInfo({}, graphicsQfIx);
-    vk::CommandPool commandPool = device.createCommandPool(commandPoolInfo);
+  void initCommandPool() {
+    vk::CommandPoolCreateInfo commandPoolInfo({}, *this->graphicsQfIx);
+    this->commandPool = this->device.createCommandPool(commandPoolInfo);
+  }
+
+  void initCommandBuffers() {
+    assert(this->device);
+    assert(this->commandPool);
+    assert(!this->framebuffers.empty());
+    assert(this->renderpass);
+    assert(this->swapchain);
+    assert(this->pipeline);
 
     vk::CommandBufferAllocateInfo allocateInfo
-      (commandPool,
+      (this->commandPool,
        vk::CommandBufferLevel::ePrimary,
-       framebuffers.size());
-    std::vector<vk::CommandBuffer> commandBuffers = device.allocateCommandBuffers(allocateInfo);
+       this->framebuffers.size());
 
-    std::ifstream vertexShaderFile("shaders/vert.spv", std::ios_base::binary | std::ios_base::ate);
-    if (!vertexShaderFile.is_open()) {
-      throw std::runtime_error("couldn't open vertex shader file");
-    }
-    uint32_t vertexShaderCodeSize = vertexShaderFile.tellg();
-    std::vector<char> vertexShaderData(vertexShaderCodeSize);
-    vertexShaderFile.seekg(0);
-    vertexShaderFile.read(vertexShaderData.data(), vertexShaderCodeSize);
-    vk::ShaderModuleCreateInfo vertexShaderInfo
-      ({},
-       vertexShaderCodeSize,
-       (uint32_t*) vertexShaderData.data());
-    vk::ShaderModule vertexShaderModule = device.createShaderModule(vertexShaderInfo);
+    this->commandBuffers =
+      this->device.allocateCommandBuffers(allocateInfo);
 
-    std::ifstream fragmentShaderFile
-      ("shaders/frag.spv",
-       std::ios_base::binary | std::ios_base::ate);
-    if (!fragmentShaderFile.is_open()) {
-      throw std::runtime_error("couldn't open fragment shader file");
+    for (size_t i = 0; i < this->commandBuffers.size(); ++i) {
+      auto &c = this->commandBuffers[i];
+      vk::CommandBufferBeginInfo beginInfo
+        (vk::CommandBufferUsageFlagBits::eSimultaneousUse, nullptr);
+      c.begin(beginInfo);
+
+      std::vector<vk::ClearValue> clearValues =
+        { vk::ClearValue().setColor(vk::ClearColorValue().setFloat32({{ 0, 1, 0, 1 }}))
+        };
+      vk::RenderPassBeginInfo renderpassBeginInfo
+        (this->renderpass,
+          this->framebuffers[i],
+          vk::Rect2D(vk::Offset2D(0, 0), this->swapchainExtent),
+          clearValues.size(),
+          clearValues.data()
+          );
+      c.beginRenderPass(renderpassBeginInfo, vk::SubpassContents::eInline);
+
+      c.bindPipeline(vk::PipelineBindPoint::eGraphics, this->pipeline);
+      c.draw(3, 1, 0, 0);
+
+      c.endRenderPass();
+
+      c.end();
     }
-    uint32_t fragmentShaderCodeSize = fragmentShaderFile.tellg();
-    std::vector<char> fragmentShaderData(fragmentShaderCodeSize);
-    fragmentShaderFile.seekg(0);
-    fragmentShaderFile.read(fragmentShaderData.data(), fragmentShaderCodeSize);
-    vk::ShaderModuleCreateInfo fragmentShaderInfo
+  }
+
+  vk::ShaderModule loadShader(const char *path) {
+    assert(this->device);
+
+    std::ifstream shaderFile(path, std::ios_base::binary | std::ios_base::ate);
+    if (!shaderFile.is_open()) {
+      throw std::runtime_error("couldn't open shader file");
+    }
+    uint32_t shaderCodeSize = shaderFile.tellg();
+    std::vector<char> shaderData(shaderCodeSize);
+    shaderFile.seekg(0);
+    shaderFile.read(shaderData.data(), shaderCodeSize);
+    vk::ShaderModuleCreateInfo shaderInfo
       ({},
-       fragmentShaderCodeSize,
-       (uint32_t*) fragmentShaderData.data());
-    vk::ShaderModule fragmentShaderModule = device.createShaderModule(fragmentShaderInfo);
+       shaderCodeSize,
+       (uint32_t*) shaderData.data());
+    return this->device.createShaderModule(shaderInfo);
+  }
+
+  void initPipeline() {
+    assert(this->device);
+    assert(this->swapchain);
+
+    vk::ShaderModule vertexShaderModule = this->loadShader("shaders/vert.spv");
+    vk::ShaderModule fragmentShaderModule = this->loadShader("shaders/frag.spv");
 
     std::vector<vk::PipelineShaderStageCreateInfo> shaderStageInfos =
       {
@@ -493,8 +610,8 @@ public:
        false);
 
     std::vector<vk::Viewport> viewports =
-      { vk::Viewport(0, 0, swapchainExtent.width, swapchainExtent.height, 0, 1) };
-    std::vector<vk::Rect2D> scissors = { vk::Rect2D(vk::Offset2D(0, 0), swapchainExtent) };
+      { vk::Viewport(0, 0, this->swapchainExtent.width, this->swapchainExtent.height, 0, 1) };
+    std::vector<vk::Rect2D> scissors = { vk::Rect2D(vk::Offset2D(0, 0), this->swapchainExtent) };
     vk::PipelineViewportStateCreateInfo viewportInfo
       ({},
        viewports.size(), viewports.data(),
@@ -544,7 +661,7 @@ public:
        blendConstants);
 
     vk::PipelineLayoutCreateInfo pipelineLayoutInfo ({}, {}, {});
-    vk::PipelineLayout pipelineLayout = device.createPipelineLayout(pipelineLayoutInfo);
+    this->pipelineLayout = this->device.createPipelineLayout(pipelineLayoutInfo);
 
     vk::GraphicsPipelineCreateInfo graphicsPipelineInfo
       ({},
@@ -559,76 +676,47 @@ public:
        nullptr,
        &colorBlendInfo,
        nullptr,
-       pipelineLayout,
-       renderpass,
+       this->pipelineLayout,
+       this->renderpass,
        0,
        nullptr,
        -1);
-    vk::Pipeline graphicsPipeline =
-      device.createGraphicsPipeline(nullptr, graphicsPipelineInfo);
+    this->pipeline =
+      this->device.createGraphicsPipeline(nullptr, graphicsPipelineInfo);
 
-    device.destroyShaderModule(vertexShaderModule);
-    device.destroyShaderModule(fragmentShaderModule);
+    this->device.destroyShaderModule(vertexShaderModule);
+    this->device.destroyShaderModule(fragmentShaderModule);
+  }
 
-    for (size_t i = 0; i < commandBuffers.size(); ++i) {
-      auto &c = commandBuffers[i];
-      vk::CommandBufferBeginInfo beginInfo({}, nullptr);
-      c.begin(beginInfo);
-
-      std::vector<vk::ClearValue> clearValues =
-        { vk::ClearValue().setColor(vk::ClearColorValue().setFloat32({{ 0, 0, 0, 1 }}))
-        };
-      vk::RenderPassBeginInfo renderpassBeginInfo
-        (renderpass,
-         framebuffers[i],
-         vk::Rect2D(vk::Offset2D(0, 0), swapchainExtent),
-         clearValues.size(),
-         clearValues.data()
-         );
-      c.beginRenderPass(renderpassBeginInfo, vk::SubpassContents::eInline);
-
-      c.bindPipeline(vk::PipelineBindPoint::eGraphics, graphicsPipeline);
-      c.draw(3, 1, 0, 0);
-
-      c.endRenderPass();
-
-      c.end();
-    }
-
-    vk::Semaphore imageAvailableSem = device.createSemaphore(vk::SemaphoreCreateInfo());
-    vk::Semaphore renderFinishedSem = device.createSemaphore(vk::SemaphoreCreateInfo());
-
-    Context context =
-      Context
-        (window,
-         instance,
-         loader,
-         messenger,
-         surface,
-         device,
-         graphicsQueue,
-         presentQueue,
-         swapchain,
-         renderpass,
-         imageViews,
-         framebuffers,
-         commandPool,
-         commandBuffers,
-         pipelineLayout,
-         graphicsPipeline,
-         imageAvailableSem,
-         renderFinishedSem);
-    return context;
+  void initSemaphores() {
+    this->imageAvailableSem = device.createSemaphore(vk::SemaphoreCreateInfo());
+    this->renderFinishedSem = device.createSemaphore(vk::SemaphoreCreateInfo());
   }
 };
 
 int main() {
-  vk::Optional<Context> context = Context::create(1280, 960, "triangle");
+  Context context = Context();
 
-  while (!context->shouldClose()) {
+  context.initWindow(1280, 960, "triangle");
+  context.initInstance();
+  context.initDebugMessenger();
+  context.getPhysicalDevice();
+  context.getSurface();
+  context.getQueueIndices();
+  context.initDevice();
+  context.getQueues();
+  context.initSwapchain();
+  context.initRenderPass();
+  context.initImageViews();
+  context.initFramebuffers();
+  context.initPipeline();
+  context.initCommandPool();
+  context.initCommandBuffers();
+  context.initSemaphores();
+
+  while (!context.shouldClose()) {
     glfwPollEvents();
-
-    context->drawFrame();
+    context.drawFrame();
   }
 
   return 0;
