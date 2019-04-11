@@ -609,13 +609,13 @@ public:
        vk::PrimitiveTopology::eTriangleList,
        false);
 
-    std::vector<vk::Viewport> viewports =
-      { vk::Viewport(0, 0, this->swapchainExtent.width, this->swapchainExtent.height, 0, 1) };
-    std::vector<vk::Rect2D> scissors = { vk::Rect2D(vk::Offset2D(0, 0), this->swapchainExtent) };
+    vk::Viewport viewport =
+      vk::Viewport(0, 0, this->swapchainExtent.width, this->swapchainExtent.height, 0, 1);
+    vk::Rect2D scissor = vk::Rect2D(vk::Offset2D(0, 0), this->swapchainExtent);
     vk::PipelineViewportStateCreateInfo viewportInfo
       ({},
-       viewports.size(), viewports.data(),
-       scissors.size(), scissors.data()
+       1, &viewport,
+       1, &scissor
        );
 
     vk::PipelineRasterizationStateCreateInfo rasterizationInfo
@@ -648,17 +648,21 @@ public:
            vk::BlendOp::eAdd,
            vk::BlendFactor::eOne,
            vk::BlendFactor::eZero,
-           vk::BlendOp::eAdd
+           vk::BlendOp::eAdd,
+           vk::ColorComponentFlagBits::eR |
+           vk::ColorComponentFlagBits::eG |
+           vk::ColorComponentFlagBits::eB |
+           vk::ColorComponentFlagBits::eA
            )
       };
-    std::array<float,4> blendConstants = {{ 0, 0, 0, 0 }};
     vk::PipelineColorBlendStateCreateInfo colorBlendInfo
       ({},
        false,
        vk::LogicOp::eNoOp,
        colorBlendAttachments.size(),
        colorBlendAttachments.data(),
-       blendConstants);
+       {{ 0, 0, 0, 0 }}
+       );
 
     vk::PipelineLayoutCreateInfo pipelineLayoutInfo ({}, {}, {});
     this->pipelineLayout = this->device.createPipelineLayout(pipelineLayoutInfo);
