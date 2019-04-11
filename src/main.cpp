@@ -46,12 +46,18 @@ private:
   std::vector<vk::CommandBuffer> commandBuffers;
   vk::PipelineLayout pipelineLayout;
   vk::Pipeline pipeline;
-  vk::Semaphore imageAvailableSem;
-  vk::Semaphore renderFinishedSem;
+  std::vector<vk::Semaphore> imageAvailableSems;
+  std::vector<vk::Semaphore> renderFinishedSems;
+  std::vector<vk::Fence> inFlightFences;
+
+  const uint32_t FRAMES_IN_FLIGHT = 2;
+  uint32_t currentFrame;
 
 
 public:
-  Context() { }
+  Context() {
+    this->currentFrame = 0;
+  }
 
   ~Context() {
     if (this->graphicsQfIx) free(this->graphicsQfIx);
@@ -61,11 +67,14 @@ public:
 
       this->device.waitIdle();
 
-      if (this->renderFinishedSem)
-        this->device.destroySemaphore(this->renderFinishedSem);
+      for (auto &f : this->inFlightFences)
+        this->device.destroyFence(f);
 
-      if (this->imageAvailableSem)
-        this->device.destroySemaphore(this->imageAvailableSem);
+      for (auto &s : this->renderFinishedSems)
+        this->device.destroySemaphore(s);
+
+      for (auto &s : this->imageAvailableSems)
+        this->device.destroySemaphore(s);
 
       if (this->pipeline)
         this->device.destroyPipeline(this->pipeline);
@@ -120,20 +129,31 @@ public:
     return glfwWindowShouldClose(this->window);
   }
 
-  void drawFrame() const {
+  void drawFrame() {
     assert(this->device);
-    assert(this->imageAvailableSem);
+    assert(this->imageAvailableSems.size() == this->FRAMES_IN_FLIGHT);
+    assert(this->renderFinishedSems.size() == this->FRAMES_IN_FLIGHT);
+    assert(this->inFlightFences.size() == this->FRAMES_IN_FLIGHT);
     assert(this->swapchain);
     assert(!this->commandBuffers.empty());
     assert(this->graphicsQueue);
     assert(this->presentQueue);
 
+    uint32_t currentFrame = this->currentFrame;
+
+    this->device.waitForFences
+      (1, &this->inFlightFences[currentFrame],
+       true,
+       std::numeric_limits<uint64_t>::max());
+    this->device.resetFences(1, &this->inFlightFences[currentFrame]);
+
+    // this is not the cause (maybe *a* cause?) I tested it with
+    // the direct vulkan call, and it still has the leak
     vk::ResultValue<uint32_t> o_ix =
       this->device.acquireNextImageKHR
-        <vk::DispatchLoaderDynamic>
         (this->swapchain,
          std::numeric_limits<uint64_t>::max(),
-         this->imageAvailableSem,
+         this->imageAvailableSems[currentFrame],
          vk::Fence(),
          this->loader);
 
@@ -143,33 +163,22 @@ public:
 
     uint32_t ix = o_ix.value;
 
-    std::vector<vk::Semaphore> waitSemaphores =
-      { imageAvailableSem };
-    std::vector<vk::PipelineStageFlags> waitMasks =
-      { vk::PipelineStageFlagBits::eColorAttachmentOutput };
-    std::vector<vk::CommandBuffer> submitBuffers =
-      { this->commandBuffers[ix] };
-    std::vector<vk::Semaphore> signalSemaphores =
-      { renderFinishedSem };
+    vk::PipelineStageFlags waitMask = vk::PipelineStageFlagBits::eColorAttachmentOutput;
     vk::SubmitInfo submitInfo
-      (waitSemaphores.size(),
-       waitSemaphores.data(),
-       waitMasks.data(),
-       submitBuffers.size(),
-       submitBuffers.data(),
-       signalSemaphores.size(),
-       signalSemaphores.data());
+      (1, &this->imageAvailableSems[currentFrame], &waitMask,
+       1, &this->commandBuffers[ix],
+       1, &this->renderFinishedSems[currentFrame]);
 
-    this->graphicsQueue.submit({ submitInfo }, nullptr);
+    this->graphicsQueue.submit(1, &submitInfo, this->inFlightFences[currentFrame]);
 
     vk::PresentInfoKHR presentInfo
-      (signalSemaphores.size(),
-       signalSemaphores.data(),
-       1,
-       &(this->swapchain),
+      (1, &this->renderFinishedSems[currentFrame],
+       1, &this->swapchain,
        &ix);
 
     this->presentQueue.presentKHR(presentInfo, this->loader);
+
+    this->currentFrame = (this->currentFrame + 1) % this->FRAMES_IN_FLIGHT;
 
   }
 
@@ -692,9 +701,13 @@ public:
     this->device.destroyShaderModule(fragmentShaderModule);
   }
 
-  void initSemaphores() {
-    this->imageAvailableSem = device.createSemaphore(vk::SemaphoreCreateInfo());
-    this->renderFinishedSem = device.createSemaphore(vk::SemaphoreCreateInfo());
+  void initSyncObjects() {
+    for (uint32_t i = 0; i < this->FRAMES_IN_FLIGHT; ++i) {
+      this->imageAvailableSems.push_back(device.createSemaphore(vk::SemaphoreCreateInfo()));
+      this->renderFinishedSems.push_back(device.createSemaphore(vk::SemaphoreCreateInfo()));
+      this->inFlightFences.push_back
+        (device.createFence(vk::FenceCreateInfo(vk::FenceCreateFlagBits::eSignaled)));
+    }
   }
 };
 
@@ -716,7 +729,7 @@ int main() {
   context.initPipeline();
   context.initCommandPool();
   context.initCommandBuffers();
-  context.initSemaphores();
+  context.initSyncObjects();
 
   while (!context.shouldClose()) {
     glfwPollEvents();
