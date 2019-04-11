@@ -539,7 +539,7 @@ public:
       c.begin(beginInfo);
 
       std::vector<vk::ClearValue> clearValues =
-        { vk::ClearValue().setColor(vk::ClearColorValue().setFloat32({{ 0, 1, 0, 1 }}))
+        { vk::ClearValue().setColor(vk::ClearColorValue().setFloat32({{ 1, 1, 1, 1 }}))
         };
       vk::RenderPassBeginInfo renderpassBeginInfo
         (this->renderpass,
