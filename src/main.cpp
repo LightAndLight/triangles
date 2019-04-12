@@ -76,33 +76,11 @@ public:
       for (auto &s : this->imageAvailableSems)
         this->device.destroySemaphore(s);
 
-      if (this->pipeline)
-        this->device.destroyPipeline(this->pipeline);
+      this->cleanupSwapchain();
 
-      if (this->pipelineLayout)
-        this->device.destroyPipelineLayout(this->pipelineLayout);
-
-      if (this->commandPool) {
-
-        if (!this->commandBuffers.empty())
-          this->device.freeCommandBuffers(this->commandPool, this->commandBuffers);
-
+      if (this->commandPool)
         this->device.destroyCommandPool(this->commandPool);
 
-      }
-
-      for (auto &f : this->framebuffers) {
-        this->device.destroyFramebuffer(f);
-      }
-      for (auto &i : this->imageViews) {
-        this->device.destroyImageView(i);
-      }
-
-      if (this->renderpass)
-        this->device.destroyRenderPass(this->renderpass);
-
-      if (this->swapchain)
-        this->device.destroySwapchainKHR(this->swapchain, nullptr, this->loader);
       this->device.destroy();
 
     }
@@ -125,6 +103,52 @@ public:
     glfwTerminate();
   }
 
+  void cleanupSwapchain() {
+    if (this->device) {
+
+      if (this->pipeline)
+        this->device.destroyPipeline(this->pipeline);
+
+      if (this->pipelineLayout)
+        this->device.destroyPipelineLayout(this->pipelineLayout);
+
+      if (this->commandPool) {
+
+        if (!this->commandBuffers.empty())
+          this->device.freeCommandBuffers(this->commandPool, this->commandBuffers);
+
+      }
+
+      for (auto &f : this->framebuffers) {
+        this->device.destroyFramebuffer(f);
+      }
+      for (auto &i : this->imageViews) {
+        this->device.destroyImageView(i);
+      }
+
+      if (this->renderpass)
+        this->device.destroyRenderPass(this->renderpass);
+
+      if (this->swapchain)
+        this->device.destroySwapchainKHR(this->swapchain, nullptr, this->loader);
+
+    }
+
+  }
+
+  void recreateSwapchain() {
+    this->device.waitIdle();
+
+    this->cleanupSwapchain();
+
+    this->initSwapchain();
+    this->initImageViews();
+    this->initRenderPass();
+    this->initPipeline();
+    this->initFramebuffers();
+    this->initCommandBuffers();
+  }
+
   bool shouldClose() const {
     return glfwWindowShouldClose(this->window);
   }
@@ -145,23 +169,21 @@ public:
       (1, &this->inFlightFences[currentFrame],
        true,
        std::numeric_limits<uint64_t>::max());
-    this->device.resetFences(1, &this->inFlightFences[currentFrame]);
 
-    // this is not the cause (maybe *a* cause?) I tested it with
-    // the direct vulkan call, and it still has the leak
-    vk::ResultValue<uint32_t> o_ix =
-      this->device.acquireNextImageKHR
-        (this->swapchain,
-         std::numeric_limits<uint64_t>::max(),
-         this->imageAvailableSems[currentFrame],
-         vk::Fence(),
-         this->loader);
-
-    if (o_ix.result != vk::Result::eSuccess) {
-      throw std::runtime_error(vk::to_string(o_ix.result));
+    uint32_t ix;
+    try {
+      vk::ResultValue<uint32_t> o_ix =
+        this->device.acquireNextImageKHR
+          (this->swapchain,
+          std::numeric_limits<uint64_t>::max(),
+          this->imageAvailableSems[currentFrame],
+          vk::Fence(),
+          this->loader);
+      ix = o_ix.value;
+    } catch (vk::OutOfDateKHRError) {
+      this->recreateSwapchain();
+      return;
     }
-
-    uint32_t ix = o_ix.value;
 
     vk::PipelineStageFlags waitMask = vk::PipelineStageFlagBits::eColorAttachmentOutput;
     vk::SubmitInfo submitInfo
@@ -169,6 +191,7 @@ public:
        1, &this->commandBuffers[ix],
        1, &this->renderFinishedSems[currentFrame]);
 
+    this->device.resetFences(1, &this->inFlightFences[currentFrame]);
     this->graphicsQueue.submit(1, &submitInfo, this->inFlightFences[currentFrame]);
 
     vk::PresentInfoKHR presentInfo
@@ -378,14 +401,13 @@ public:
       }
     }
 
-    this->swapchainExtent =
-      vk::Extent2D
-      (std::min
-         (std::max(this->width, capabilities.minImageExtent.width),
-          capabilities.maxImageExtent.width),
-       std::min
-         (std::max(this->height, capabilities.minImageExtent.height),
-          capabilities.maxImageExtent.height));
+    if (capabilities.currentExtent.width != 0xFFFFFFFF) {
+      this->swapchainExtent = capabilities.currentExtent;
+    } else {
+      int w, h;
+      glfwGetFramebufferSize(this->window, &w, &h);
+      this->swapchainExtent = vk::Extent2D(w, h);
+    }
 
     vk::SharingMode sharingMode;
     std::vector<uint32_t> sharingIndices;
