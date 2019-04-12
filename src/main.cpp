@@ -147,8 +147,7 @@ public:
        std::numeric_limits<uint64_t>::max());
     this->device.resetFences(1, &this->inFlightFences[currentFrame]);
 
-    // this is not the cause (maybe *a* cause?) I tested it with
-    // the direct vulkan call, and it still has the leak
+    /*
     vk::ResultValue<uint32_t> o_ix =
       this->device.acquireNextImageKHR
         (this->swapchain,
@@ -162,21 +161,56 @@ public:
     }
 
     uint32_t ix = o_ix.value;
+    */
 
+    uint32_t ix;
+    this->loader.vkAcquireNextImageKHR
+      (this->device,
+       this->swapchain,
+       std::numeric_limits<uint64_t>::max(),
+       this->imageAvailableSems[currentFrame],
+       vk::Fence(),
+       &ix);
+
+    /*
     vk::PipelineStageFlags waitMask = vk::PipelineStageFlagBits::eColorAttachmentOutput;
     vk::SubmitInfo submitInfo
       (1, &this->imageAvailableSems[currentFrame], &waitMask,
        1, &this->commandBuffers[ix],
        1, &this->renderFinishedSems[currentFrame]);
 
-    this->graphicsQueue.submit(1, &submitInfo, this->inFlightFences[currentFrame]);
+     this->graphicsQueue.submit(1, &submitInfo, this->inFlightFences[currentFrame]);
+    */
 
+    VkPipelineStageFlags waitMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    VkSemaphore a = this->imageAvailableSems[currentFrame];
+    VkCommandBuffer b = this->commandBuffers[ix];
+    VkSemaphore c = this->renderFinishedSems[currentFrame];
+    VkSubmitInfo submitInfo =
+      {VK_STRUCTURE_TYPE_SUBMIT_INFO, NULL,
+       1, &a, &waitMask,
+       1, &b,
+       1, &c};
+
+    vkQueueSubmit(this->graphicsQueue, 1, &submitInfo, this->inFlightFences[currentFrame]);
+
+    /*
     vk::PresentInfoKHR presentInfo
       (1, &this->renderFinishedSems[currentFrame],
        1, &this->swapchain,
        &ix);
 
     this->presentQueue.presentKHR(presentInfo, this->loader);
+    */
+    VkSwapchainKHR e = this->swapchain;
+    VkPresentInfoKHR presentInfo =
+      {VK_STRUCTURE_TYPE_PRESENT_INFO_KHR, NULL,
+       1, &c,
+       1, &e,
+       &ix,
+       NULL};
+
+    this->loader.vkQueuePresentKHR(this->presentQueue, &presentInfo);
 
     this->currentFrame = (this->currentFrame + 1) % this->FRAMES_IN_FLIGHT;
 
