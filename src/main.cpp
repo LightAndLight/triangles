@@ -194,6 +194,8 @@ public:
     this->width = w;
     this->height = h;
     this->title = title;
+
+    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     this->window = glfwCreateWindow(w, h, title, nullptr, nullptr);
   }
 
